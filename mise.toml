@@ -1,0 +1,5 @@
+[env]
+DEVELOPER_DIR = "/Applications/Xcode_26.3.app/Contents/Developer"
+
+[tools]
+zig = "latest"
