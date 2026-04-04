@@ -3,3 +3,16 @@ DEVELOPER_DIR = "/Applications/Xcode_26.3.app/Contents/Developer"
 
 [tools]
 zig = "latest"
+go = "1.26"
+
+[tasks.toml-test]
+description = "Install and run the official toml-test suite against the local decoder"
+run = '''
+go install github.com/toml-lang/toml-test/v2/cmd/toml-test@latest
+"$(go env GOROOT)/bin/toml-test" test -toml 1.1 -decoder zig-out/bin/toml-test-decoder
+'''
+depends = ["build-decoder"]
+
+[tasks.build-decoder]
+description = "Build the toml-test decoder"
+run = "zig build"
