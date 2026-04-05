@@ -47,6 +47,24 @@ pub const Value = union(enum) {
             .integer => |n| try writer.print("{{\"type\": \"integer\", \"value\": \"{}\"}}", .{n}),
             .float => |n| {
                 try writer.writeAll("{\"type\": \"float\", \"value\": \"");
+                if (std.math.isNan(n)) {
+                    if (std.math.signbit(n)) {
+                        try writer.writeAll("-nan");
+                    } else {
+                        try writer.writeAll("nan");
+                    }
+                    try writer.writeAll("\"}");
+                    return;
+                }
+                if (std.math.isInf(n)) {
+                    if (std.math.signbit(n)) {
+                        try writer.writeAll("-inf");
+                    } else {
+                        try writer.writeAll("inf");
+                    }
+                    try writer.writeAll("\"}");
+                    return;
+                }
                 var buf: [64]u8 = undefined;
                 const rendered = try std.fmt.bufPrint(&buf, "{d}", .{n});
                 try writer.writeAll(rendered);
@@ -58,7 +76,11 @@ pub const Value = union(enum) {
                 try writer.writeAll("\"}");
             },
             .boolean => |b| try writer.print("{{\"type\": \"bool\", \"value\": \"{s}\"}}", .{if (b) "true" else "false"}),
-            .date => |d| try writer.print("{{\"type\": \"date-local\", \"value\": \"{d:0>4}-{d:0>2}-{d:0>2}\"}}", .{ d.year, d.month, d.day }),
+            .date => |d| try writer.print("{{\"type\": \"date-local\", \"value\": \"{d:0>4}-{d:0>2}-{d:0>2}\"}}", .{
+                @as(u16, @intCast(d.year)),
+                @as(u8, @intCast(d.month)),
+                @as(u8, @intCast(d.day)),
+            }),
             .time => |t| try writeTime(writer, t),
             .datetime => |dt| try writeDateTime(writer, dt),
             .datetime_tz => |dtz| try writeDateTimeTz(writer, dtz),
@@ -90,7 +112,7 @@ pub const Value = union(enum) {
 fn writeFrac(writer: anytype, usec: i32) !void {
     if (usec == 0) return;
     var buf: [7]u8 = undefined;
-    const rendered = try std.fmt.bufPrint(&buf, "{d:0>6}", .{usec});
+    const rendered = try std.fmt.bufPrint(&buf, "{d:0>6}", .{@as(u32, @intCast(usec))});
     var end: usize = rendered.len;
     while (end > 3 and rendered[end - 1] == '0') : (end -= 1) {}
     try writer.writeByte('.');
@@ -125,19 +147,23 @@ fn writeIndent(writer: anytype, indent: usize) !void {
 }
 
 fn writeTime(writer: anytype, t: datetime.Time) !void {
-    try writer.print("{{\"type\": \"time-local\", \"value\": \"{d:0>2}:{d:0>2}:{d:0>2}", .{ t.hour, t.minute, t.second });
+    try writer.print("{{\"type\": \"time-local\", \"value\": \"{d:0>2}:{d:0>2}:{d:0>2}", .{
+        @as(u8, @intCast(t.hour)),
+        @as(u8, @intCast(t.minute)),
+        @as(u8, @intCast(t.second)),
+    });
     try writeFrac(writer, t.usec);
     try writer.writeAll("\"}");
 }
 
 fn writeDateTime(writer: anytype, dt: datetime.DateTime) !void {
-    try writer.print("{{\"type\": \"datetime-local\", \"value\": \"{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
-        dt.date.year,
-        dt.date.month,
-        dt.date.day,
-        dt.time.hour,
-        dt.time.minute,
-        dt.time.second,
+    try writer.print("{{\"type\": \"datetime-local\", \"value\": \"{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
+        @as(u16, @intCast(dt.date.year)),
+        @as(u8, @intCast(dt.date.month)),
+        @as(u8, @intCast(dt.date.day)),
+        @as(u8, @intCast(dt.time.hour)),
+        @as(u8, @intCast(dt.time.minute)),
+        @as(u8, @intCast(dt.time.second)),
     });
     try writeFrac(writer, dt.time.usec);
     try writer.writeAll("\"}");
@@ -145,18 +171,22 @@ fn writeDateTime(writer: anytype, dt: datetime.DateTime) !void {
 
 fn writeDateTimeTz(writer: anytype, dt: datetime.DateTimeTz) !void {
     const mins = dt.tz_minutes;
-    const sign: u8 = if (mins < 0) '-' else '+';
     const abs = @abs(mins);
-    try writer.print("{{\"type\": \"datetime\", \"value\": \"{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
-        dt.date.year,
-        dt.date.month,
-        dt.date.day,
-        dt.time.hour,
-        dt.time.minute,
-        dt.time.second,
+    try writer.print("{{\"type\": \"datetime\", \"value\": \"{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
+        @as(u16, @intCast(dt.date.year)),
+        @as(u8, @intCast(dt.date.month)),
+        @as(u8, @intCast(dt.date.day)),
+        @as(u8, @intCast(dt.time.hour)),
+        @as(u8, @intCast(dt.time.minute)),
+        @as(u8, @intCast(dt.time.second)),
     });
     try writeFrac(writer, dt.time.usec);
-    try writer.print("{c}{d:0>2}:{d:0>2}\"}}", .{ sign, @divFloor(abs, 60), @mod(abs, 60) });
+    if (mins == 0) {
+        try writer.writeAll("Z\"}");
+    } else {
+        const sign: u8 = if (mins < 0) '-' else '+';
+        try writer.print("{c}{d:0>2}:{d:0>2}\"}}", .{ sign, @divFloor(abs, 60), @mod(abs, 60) });
+    }
 }
 
 pub const Document = struct {

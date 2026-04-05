@@ -178,6 +178,10 @@ fn parseScalar(text: []const u8, index: *usize) anyerror!value_mod.Value {
     if (raw.len == 0) return error.ExpectedValue;
     if (std.mem.eql(u8, raw, "true")) return .{ .boolean = true };
     if (std.mem.eql(u8, raw, "false")) return .{ .boolean = false };
+    if (std.mem.eql(u8, raw, "inf") or std.mem.eql(u8, raw, "+inf")) return .{ .float = std.math.inf(f64) };
+    if (std.mem.eql(u8, raw, "-inf")) return .{ .float = -std.math.inf(f64) };
+    if (std.mem.eql(u8, raw, "nan") or std.mem.eql(u8, raw, "+nan")) return .{ .float = std.math.nan(f64) };
+    if (std.mem.eql(u8, raw, "-nan")) return .{ .float = -std.math.nan(f64) };
 
     if (datetime.parseDateTime(raw)) |parsed| {
         return switch (parsed) {
@@ -197,38 +201,69 @@ fn parseInteger(raw: []const u8) ?i64 {
     var cleaned: [256]u8 = undefined;
     if (raw.len == 0 or raw.len > cleaned.len) return null;
     var out: usize = 0;
-    for (raw) |ch| {
+    var i: usize = 0;
+    var sign: i64 = 1;
+    if (raw[i] == '+' or raw[i] == '-') {
+        sign = if (raw[i] == '-') -1 else 1;
+        i += 1;
+        if (i >= raw.len) return null;
+    }
+    var base: u8 = 10;
+    if (raw.len - i >= 2 and raw[i] == '0') {
+        switch (raw[i + 1]) {
+            'x' => {
+                if (sign < 0 or raw[0] == '+') return null;
+                base = 16;
+                i += 2;
+            },
+            'o' => {
+                if (sign < 0 or raw[0] == '+') return null;
+                base = 8;
+                i += 2;
+            },
+            'b' => {
+                if (sign < 0 or raw[0] == '+') return null;
+                base = 2;
+                i += 2;
+            },
+            else => {},
+        }
+    }
+
+    const digits = raw[i..];
+    if (digits.len == 0) return null;
+    if (digits[0] == '_' or digits[digits.len - 1] == '_') return null;
+    var prev_underscore = false;
+    for (digits) |ch| {
+        if (ch == '_') {
+            if (prev_underscore) return null;
+            prev_underscore = true;
+            continue;
+        }
+        const ok = switch (base) {
+            2 => ch == '0' or ch == '1',
+            8 => ch >= '0' and ch <= '7',
+            10 => ch >= '0' and ch <= '9',
+            16 => std.ascii.isDigit(ch) or (ch >= 'a' and ch <= 'f') or (ch >= 'A' and ch <= 'F'),
+            else => false,
+        };
+        if (!ok) return null;
+        prev_underscore = false;
+    }
+    if (prev_underscore) return null;
+
+    if (base == 10) {
+        if (digits.len > 1 and digits[0] == '0') return null;
+        if (digits.len > 2 and digits[0] == '0' and digits[1] == '_') return null;
+    }
+
+    for (digits) |ch| {
         if (ch == '_') continue;
         cleaned[out] = ch;
         out += 1;
     }
     const buf = cleaned[0..out];
-    var base: u8 = 10;
-    var digits = buf;
-    var sign: i64 = 1;
-    if (digits.len > 0 and (digits[0] == '+' or digits[0] == '-')) {
-        sign = if (digits[0] == '-') -1 else 1;
-        digits = digits[1..];
-    }
-    if (digits.len >= 2 and digits[0] == '0') {
-        switch (digits[1]) {
-            'x' => {
-                base = 16;
-                digits = digits[2..];
-            },
-            'o' => {
-                base = 8;
-                digits = digits[2..];
-            },
-            'b' => {
-                base = 2;
-                digits = digits[2..];
-            },
-            else => {},
-        }
-    }
-    if (digits.len == 0) return null;
-    const parsed = std.fmt.parseInt(i64, digits, base) catch return null;
+    const parsed = std.fmt.parseInt(i64, buf, base) catch return null;
     return sign * parsed;
 }
 
@@ -236,6 +271,61 @@ fn parseFloat(raw: []const u8) ?f64 {
     if (std.mem.indexOfAny(u8, raw, ".eE") == null) return null;
     var cleaned: [256]u8 = undefined;
     if (raw.len == 0 or raw.len > cleaned.len) return null;
+
+    var i: usize = 0;
+    if (raw[i] == '+' or raw[i] == '-') {
+        i += 1;
+        if (i >= raw.len) return null;
+    }
+
+    var saw_dot = false;
+    var saw_exp = false;
+    var saw_digit_before_exp = false;
+    var saw_digit_after_dot = false;
+    var saw_exp_digit = false;
+    var prev: u8 = 0;
+    var prev_underscore = false;
+    while (i < raw.len) : (i += 1) {
+        const ch = raw[i];
+        if (ch == '_') {
+            if (prev_underscore or i == 0 or i + 1 >= raw.len) return null;
+            const next = raw[i + 1];
+            if (!std.ascii.isDigit(prev) or !std.ascii.isDigit(next)) return null;
+            prev_underscore = true;
+            continue;
+        }
+        prev_underscore = false;
+        switch (ch) {
+            '0'...'9' => {
+                if (saw_exp) saw_exp_digit = true else saw_digit_before_exp = true;
+                if (saw_dot and !saw_exp) saw_digit_after_dot = true;
+            },
+            '.' => {
+                if (saw_dot or saw_exp) return null;
+                if (!saw_digit_before_exp) return null;
+                saw_dot = true;
+            },
+            'e', 'E' => {
+                if (saw_exp or !saw_digit_before_exp) return null;
+                if (prev == '_' or prev == '.') return null;
+                saw_exp = true;
+                if (i + 1 < raw.len and (raw[i + 1] == '+' or raw[i + 1] == '-')) i += 1;
+                if (i + 1 >= raw.len) return null;
+            },
+            else => return null,
+        }
+        prev = ch;
+    }
+    if (prev_underscore or prev == '.' or prev == 'e' or prev == 'E' or prev == '+' or prev == '-') return null;
+    if (!saw_dot and !saw_exp) return null;
+    if (saw_dot and !saw_digit_after_dot) return null;
+    if (saw_exp and !saw_exp_digit) return null;
+
+    const start: usize = if (raw[0] == '+' or raw[0] == '-') 1 else 0;
+    if (raw[start] == '0' and raw.len > start + 1 and raw[start + 1] != '.' and raw[start + 1] != 'e' and raw[start + 1] != 'E') {
+        return null;
+    }
+
     var out: usize = 0;
     for (raw) |ch| {
         if (ch == '_') continue;
