@@ -2,7 +2,7 @@
 DEVELOPER_DIR = "/Applications/Xcode_26.3.app/Contents/Developer"
 
 [settings]
-terminal_progress = "false"
+terminal_progress = false
 
 [tools]
 zig = "latest"
