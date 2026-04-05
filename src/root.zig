@@ -58,9 +58,9 @@ test "invalid documents return errors" {
 }
 
 fn expectFixtureMatches(allocator: std.mem.Allocator, stem: []const u8) !void {
-    const input_path = try std.fmt.allocPrint(allocator, "testdata/upstream/parser/in/{s}.toml", .{stem});
+    const input_path = try std.fmt.allocPrint(allocator, "testdata/parser/in/{s}.toml", .{stem});
     defer allocator.free(input_path);
-    const output_path = try std.fmt.allocPrint(allocator, "testdata/upstream/parser/good/{s}.out", .{stem});
+    const output_path = try std.fmt.allocPrint(allocator, "testdata/parser/out/{s}.out", .{stem});
     defer allocator.free(output_path);
 
     var doc = try parseFile(allocator, input_path);

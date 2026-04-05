@@ -17,6 +17,7 @@ The current implementation is intentionally incomplete but bootstrapped and runn
 - `src/datetime.zig`: TOML date/time parsing helpers
 - `src/value.zig`: in-memory value tree and TOML-test JSON rendering
 - `test/tools/toml_test_decoder.zig`: decoder executable used by the official `toml-test` harness
+- `testdata/parser/`: the minimal committed parser golden fixtures used by local tests
 - `mise.toml`: tool versions and tasks
 
 ## Working Commands
@@ -26,14 +27,14 @@ Use the Xcode 26.3 developer dir configured in `mise.toml`.
 - `mise install`
 - `zig build test`
 - `zig build check`
-- `zig build toml-test -- testdata/upstream/parser/in/1.toml`
+- `zig build toml-test -- testdata/parser/in/1.toml`
 - `mise run toml-test`
 
 Notes:
 
 - `zig build` installs the decoder into `zig-out/bin/toml-test-decoder`
 - `zig build check` only compiles artifacts; it is not enough for the `toml-test` harness by itself
-- `testdata/upstream/` is git-ignored for now
+- `testdata/parser/` is the only committed local fixture set
 
 ## Current Status
 

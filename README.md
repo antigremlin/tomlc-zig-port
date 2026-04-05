@@ -6,7 +6,7 @@ The upstream C reference checkout used during this port lives at:
 
 - `/Users/tarandr/src/tries/2026-04-03-tomlc17`
 
-This repo copies selected upstream test fixtures into `testdata/upstream/`, but keeps the C implementation itself external.
+This repo keeps a minimal committed parser fixture set in `testdata/parser/`, while the full C reference implementation stays external.
 
 ## Workflow
 
