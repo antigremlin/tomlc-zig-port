@@ -101,18 +101,26 @@ fn parseArray(allocator: std.mem.Allocator, text: []const u8, index: *usize) any
     var items = std.ArrayList(value_mod.Value){};
     defer items.deinit(allocator);
 
+    var needs_value = true;
     while (true) {
-        skipSpacesAndNewlines(text, index);
+        skipArrayTrivia(text, index);
         if (index.* >= text.len) return error.UnexpectedEof;
         if (text[index.*] == ']') {
+            if (needs_value and items.items.len > 0) {
+                index.* += 1;
+                break;
+            }
             index.* += 1;
             break;
         }
+        if (!needs_value) return error.ExpectedArrayDelimiter;
         try items.append(allocator, try parseValue(allocator, text, index));
-        skipSpacesAndNewlines(text, index);
+        needs_value = false;
+        skipArrayTrivia(text, index);
         if (index.* >= text.len) return error.UnexpectedEof;
         if (text[index.*] == ',') {
             index.* += 1;
+            needs_value = true;
             continue;
         }
         if (text[index.*] == ']') {
@@ -291,6 +299,7 @@ fn parseBasicString(allocator: std.mem.Allocator, text: []const u8, index: *usiz
     defer list.deinit(allocator);
     while (index.* < text.len) {
         const ch = text[index.*];
+        if (ch == '\n' or ch == '\r') return error.UnterminatedString;
         if (ch == '"') {
             index.* += 1;
             return try list.toOwnedSlice(allocator);
@@ -336,7 +345,9 @@ fn parseLiteralString(allocator: std.mem.Allocator, text: []const u8, index: *us
     if (text[index.*] != '\'') return error.ExpectedString;
     index.* += 1;
     const start = index.*;
-    while (index.* < text.len and text[index.*] != '\'') : (index.* += 1) {}
+    while (index.* < text.len and text[index.*] != '\'') : (index.* += 1) {
+        if (text[index.*] == '\n' or text[index.*] == '\r') return error.UnterminatedString;
+    }
     if (index.* >= text.len) return error.UnterminatedString;
     const out = try allocator.dupe(u8, text[start..index.*]);
     index.* += 1;
@@ -349,4 +360,15 @@ fn skipSpaces(text: []const u8, index: *usize) void {
 
 fn skipSpacesAndNewlines(text: []const u8, index: *usize) void {
     while (index.* < text.len and (text[index.*] == ' ' or text[index.*] == '\t' or text[index.*] == '\r' or text[index.*] == '\n')) : (index.* += 1) {}
+}
+
+fn skipArrayTrivia(text: []const u8, index: *usize) void {
+    while (index.* < text.len) {
+        skipSpacesAndNewlines(text, index);
+        if (index.* < text.len and text[index.*] == '#') {
+            while (index.* < text.len and text[index.*] != '\n') : (index.* += 1) {}
+            continue;
+        }
+        break;
+    }
 }
