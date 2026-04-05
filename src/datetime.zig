@@ -58,18 +58,25 @@ pub fn parseDate(text: []const u8) ?Date {
 }
 
 pub fn parseTime(text: []const u8) ?Time {
-    if (text.len < 8 or text[2] != ':' or text[5] != ':') return null;
+    if (text.len < 5 or text[2] != ':') return null;
     const hour = std.fmt.parseInt(i8, text[0..2], 10) catch return null;
     const minute = std.fmt.parseInt(i8, text[3..5], 10) catch return null;
-    const second = std.fmt.parseInt(i8, text[6..8], 10) catch return null;
+    var second: i8 = 0;
+    var frac_start: usize = text.len;
+    if (text.len > 5) {
+        if (text.len < 8 or text[5] != ':' or !std.ascii.isDigit(text[6]) or !std.ascii.isDigit(text[7])) return null;
+        second = std.fmt.parseInt(i8, text[6..8], 10) catch return null;
+        frac_start = 8;
+    }
     var usec: i32 = 0;
-    if (text.len > 8) {
-        if (text[8] != '.') return null;
-        const frac = text[9..];
-        if (frac.len == 0 or frac.len > 6) return null;
+    if (frac_start < text.len) {
+        if (text[frac_start] != '.') return null;
+        const frac = text[frac_start + 1 ..];
+        if (frac.len == 0) return null;
         for (frac) |ch| if (!std.ascii.isDigit(ch)) return null;
+        const keep = @min(frac.len, 6);
         var padded: [6]u8 = [_]u8{'0'} ** 6;
-        @memcpy(padded[0..frac.len], frac);
+        @memcpy(padded[0..keep], frac[0..keep]);
         usec = std.fmt.parseInt(i32, padded[0..], 10) catch return null;
     }
     const time = Time{ .hour = hour, .minute = minute, .second = second, .usec = usec };
@@ -104,6 +111,7 @@ pub fn parseDateTime(text: []const u8) ?union(enum) {
                     const sign: i16 = if (text[idx] == '-') -1 else 1;
                     const hour = std.fmt.parseInt(i16, text[idx + 1 .. idx + 3], 10) catch return null;
                     const min = std.fmt.parseInt(i16, text[idx + 4 .. idx + 6], 10) catch return null;
+                    if (hour > 23 or min > 59) return null;
                     tz_minutes = sign * (hour * 60 + min);
                     time_end = idx;
                     break;
