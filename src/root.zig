@@ -100,4 +100,14 @@ test "translated scanner cases" {
         \\'''I [dw]on't need \d{2} apples'''
     , &idx);
     try std.testing.expectEqualStrings("I [dw]on't need \\d{2} apples", multiline.string);
+
+    idx = 0;
+    const unicode = try scanner.parseValue(allocator, "\"Snowman: \\u2603\"", &idx);
+    try std.testing.expectEqualStrings("Snowman: ☃", unicode.string);
+
+    idx = 0;
+    try std.testing.expectError(error.UnsupportedEscape, scanner.parseValue(allocator, "\"bad: \\q\"", &idx));
+
+    idx = 0;
+    try std.testing.expectError(error.InvalidUnicodeEscape, scanner.parseValue(allocator, "\"bad: \\uD800\"", &idx));
 }

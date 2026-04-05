@@ -346,38 +346,104 @@ fn parseBareKey(text: []const u8, index: *usize) anyerror![]const u8 {
     return text[start..index.*];
 }
 
+fn isForbiddenStringCodepoint(ch: u8, multiline: bool) bool {
+    if (ch == '\t') return false;
+    if (multiline and ch == '\n') return false;
+    return ch < 0x20 or ch == 0x7f;
+}
+
+fn isHexDigit(ch: u8) bool {
+    return std.ascii.isDigit(ch) or (ch >= 'a' and ch <= 'f') or (ch >= 'A' and ch <= 'F');
+}
+
+fn appendUnicodeEscape(list: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8, index: *usize, digits: usize) anyerror!void {
+    if (index.* + digits > text.len) return error.InvalidUnicodeEscape;
+
+    var codepoint: u21 = 0;
+    var i: usize = 0;
+    while (i < digits) : (i += 1) {
+        const ch = text[index.* + i];
+        if (!isHexDigit(ch)) return error.InvalidUnicodeEscape;
+        codepoint = (codepoint << 4) | @as(u21, switch (ch) {
+            '0'...'9' => ch - '0',
+            'a'...'f' => ch - 'a' + 10,
+            'A'...'F' => ch - 'A' + 10,
+            else => unreachable,
+        });
+    }
+
+    if (codepoint > 0x10ffff) return error.InvalidUnicodeEscape;
+    if (codepoint >= 0xd800 and codepoint <= 0xdfff) return error.InvalidUnicodeEscape;
+
+    var utf8_buf: [4]u8 = undefined;
+    const utf8_len = std.unicode.utf8Encode(codepoint, &utf8_buf) catch return error.InvalidUnicodeEscape;
+    try list.appendSlice(allocator, utf8_buf[0..utf8_len]);
+    index.* += digits;
+}
+
 fn parseBasicString(allocator: std.mem.Allocator, text: []const u8, index: *usize, allow_multiline: bool) anyerror![]const u8 {
     if (index.* + 2 < text.len and text[index.*] == '"' and text[index.* + 1] == '"' and text[index.* + 2] == '"') {
         if (!allow_multiline) return error.MultilineNotAllowed;
         index.* += 3;
-        if (index.* < text.len and text[index.*] == '\n') index.* += 1;
+        if (index.* < text.len and text[index.*] == '\n') {
+            index.* += 1;
+        } else if (index.* + 1 < text.len and text[index.*] == '\r' and text[index.* + 1] == '\n') {
+            index.* += 2;
+        }
         var list = std.ArrayList(u8){};
         defer list.deinit(allocator);
-        while (index.* + 2 < text.len) {
-            if (text[index.*] == '"' and text[index.* + 1] == '"' and text[index.* + 2] == '"') {
-                index.* += 3;
+        while (index.* < text.len) {
+            if (index.* + 2 < text.len and text[index.*] == '"' and text[index.* + 1] == '"' and text[index.* + 2] == '"') {
+                var quote_run: usize = 3;
+                while (index.* + quote_run < text.len and text[index.* + quote_run] == '"' and quote_run < 5) : (quote_run += 1) {}
+                index.* += quote_run;
+                var i: usize = 3;
+                while (i < quote_run) : (i += 1) try list.append(allocator, '"');
                 return try list.toOwnedSlice(allocator);
             }
-            if (text[index.*] == '\\') {
+            const ch = text[index.*];
+            if (ch == '\\') {
                 if (index.* + 1 >= text.len) return error.UnexpectedEof;
+                var continuation_idx = index.* + 1;
+                while (continuation_idx < text.len and (text[continuation_idx] == ' ' or text[continuation_idx] == '\t')) : (continuation_idx += 1) {}
+                if (continuation_idx < text.len and text[continuation_idx] == '\n') {
+                    index.* = continuation_idx + 1;
+                    while (index.* < text.len and (text[index.*] == ' ' or text[index.*] == '\t' or text[index.*] == '\n')) : (index.* += 1) {}
+                    continue;
+                }
+                if (continuation_idx + 1 < text.len and text[continuation_idx] == '\r' and text[continuation_idx + 1] == '\n') {
+                    index.* = continuation_idx + 2;
+                    while (index.* < text.len and (text[index.*] == ' ' or text[index.*] == '\t' or text[index.*] == '\n')) : (index.* += 1) {}
+                    continue;
+                }
+
                 const next = text[index.* + 1];
                 switch (next) {
+                    'b' => try list.append(allocator, 0x08),
                     'n' => try list.append(allocator, '\n'),
                     't' => try list.append(allocator, '\t'),
+                    'f' => try list.append(allocator, 0x0c),
                     'r' => try list.append(allocator, '\r'),
                     '"' => try list.append(allocator, '"'),
                     '\\' => try list.append(allocator, '\\'),
-                    '\n' => {
+                    'u' => {
                         index.* += 2;
-                        while (index.* < text.len and (text[index.*] == ' ' or text[index.*] == '\t' or text[index.*] == '\n' or text[index.*] == '\r')) : (index.* += 1) {}
+                        try appendUnicodeEscape(&list, allocator, text, index, 4);
                         continue;
                     },
-                    else => try list.append(allocator, next),
+                    'U' => {
+                        index.* += 2;
+                        try appendUnicodeEscape(&list, allocator, text, index, 8);
+                        continue;
+                    },
+                    else => return error.UnsupportedEscape,
                 }
                 index.* += 2;
                 continue;
             }
-            try list.append(allocator, text[index.*]);
+
+            if (ch == '\r' or isForbiddenStringCodepoint(ch, true)) return error.InvalidStringCodepoint;
+            try list.append(allocator, ch);
             index.* += 1;
         }
         return error.UnterminatedString;
@@ -405,11 +471,22 @@ fn parseBasicString(allocator: std.mem.Allocator, text: []const u8, index: *usiz
                 'r' => try list.append(allocator, '\r'),
                 '"' => try list.append(allocator, '"'),
                 '\\' => try list.append(allocator, '\\'),
+                'u' => {
+                    index.* += 2;
+                    try appendUnicodeEscape(&list, allocator, text, index, 4);
+                    continue;
+                },
+                'U' => {
+                    index.* += 2;
+                    try appendUnicodeEscape(&list, allocator, text, index, 8);
+                    continue;
+                },
                 else => return error.UnsupportedEscape,
             }
             index.* += 2;
             continue;
         }
+        if (isForbiddenStringCodepoint(ch, false)) return error.InvalidStringCodepoint;
         try list.append(allocator, ch);
         index.* += 1;
     }
@@ -420,28 +497,43 @@ fn parseLiteralString(allocator: std.mem.Allocator, text: []const u8, index: *us
     if (index.* + 2 < text.len and text[index.*] == '\'' and text[index.* + 1] == '\'' and text[index.* + 2] == '\'') {
         if (!allow_multiline) return error.MultilineNotAllowed;
         index.* += 3;
-        if (index.* < text.len and text[index.*] == '\n') index.* += 1;
-        const start = index.*;
+        if (index.* < text.len and text[index.*] == '\n') {
+            index.* += 1;
+        } else if (index.* + 1 < text.len and text[index.*] == '\r' and text[index.* + 1] == '\n') {
+            index.* += 2;
+        }
+
+        var list = std.ArrayList(u8){};
+        defer list.deinit(allocator);
         while (index.* + 2 < text.len) : (index.* += 1) {
             if (text[index.*] == '\'' and text[index.* + 1] == '\'' and text[index.* + 2] == '\'') {
-                const out = try allocator.dupe(u8, text[start..index.*]);
-                index.* += 3;
-                return out;
+                var quote_run: usize = 3;
+                while (index.* + quote_run < text.len and text[index.* + quote_run] == '\'' and quote_run < 5) : (quote_run += 1) {}
+                index.* += quote_run;
+                var i: usize = 3;
+                while (i < quote_run) : (i += 1) try list.append(allocator, '\'');
+                return try list.toOwnedSlice(allocator);
             }
+            const ch = text[index.*];
+            if (ch == '\r' or isForbiddenStringCodepoint(ch, true)) return error.InvalidStringCodepoint;
+            try list.append(allocator, ch);
         }
+
         return error.UnterminatedString;
     }
 
     if (text[index.*] != '\'') return error.ExpectedString;
     index.* += 1;
-    const start = index.*;
+    var list = std.ArrayList(u8){};
+    defer list.deinit(allocator);
     while (index.* < text.len and text[index.*] != '\'') : (index.* += 1) {
         if (text[index.*] == '\n' or text[index.*] == '\r') return error.UnterminatedString;
+        if (isForbiddenStringCodepoint(text[index.*], false)) return error.InvalidStringCodepoint;
+        try list.append(allocator, text[index.*]);
     }
     if (index.* >= text.len) return error.UnterminatedString;
-    const out = try allocator.dupe(u8, text[start..index.*]);
     index.* += 1;
-    return out;
+    return try list.toOwnedSlice(allocator);
 }
 
 fn skipSpaces(text: []const u8, index: *usize) void {
