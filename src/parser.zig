@@ -22,7 +22,8 @@ const NodeKind = enum {
 
 const Node = struct {
     kind: NodeKind,
-    explicit: bool = false,
+    explicit_header: bool = false,
+    defined_by_dotted: bool = false,
     is_inline: bool = false,
     data: union(NodeKind) {
         string: []const u8,
@@ -74,6 +75,7 @@ pub const Parser = struct {
             } else {
                 try self.parseKeyValue(self.current_table);
             }
+            try self.expectLineEnd();
             self.skipToNextLine();
         }
     }
@@ -111,22 +113,31 @@ pub const Parser = struct {
 
         var cur = table;
         for (parts[0 .. count - 1]) |part| {
-            cur = try self.ensureTableChild(cur, part, false);
+            if (self.lookupField(cur, part)) |existing| {
+                if (existing.kind == .table and existing.explicit_header) return error.DuplicateKey;
+            }
+            cur = try self.ensureTableChild(cur, part, false, true);
         }
         try self.insertEntry(cur, parts[count - 1], value, false);
     }
 
     fn parseKeyParts(self: *Parser, out: *[KeyDepthMax][]const u8, stop_before: []const u8) ParseError!usize {
         var count: usize = 0;
+        var needs_part = true;
         while (true) {
             self.scan.skipSpaces();
-            if (std.mem.startsWith(u8, self.source[self.scan.pos..], stop_before)) break;
+            if (std.mem.startsWith(u8, self.source[self.scan.pos..], stop_before)) {
+                if (needs_part and count > 0) return error.ExpectedKey;
+                break;
+            }
             if (count == KeyDepthMax) return error.KeyTooDeep;
             out[count] = try scanner.parseKeyPart(self.arena, self.source, &self.scan.pos);
             count += 1;
+            needs_part = false;
             self.scan.skipSpaces();
             if (self.scan.pos < self.source.len and self.source[self.scan.pos] == '.') {
                 self.scan.pos += 1;
+                needs_part = true;
                 continue;
             }
             break;
@@ -138,7 +149,17 @@ pub const Parser = struct {
         var cur = self.root;
         for (parts, 0..) |part, idx| {
             const is_last = idx + 1 == parts.len;
-            cur = try self.ensureTableChild(cur, part, is_last);
+            const existing = self.lookupField(cur, part);
+            if (existing) |node| {
+                if (!is_last and node.kind == .array) {
+                    if (node.data.array.items.len == 0) return error.InvalidTableArray;
+                    const latest = node.data.array.items[node.data.array.items.len - 1];
+                    if (latest.kind != .table) return error.ExpectedTable;
+                    cur = latest;
+                    continue;
+                }
+            }
+            cur = try self.ensureTableChild(cur, part, is_last, false);
         }
         return cur;
     }
@@ -147,7 +168,7 @@ pub const Parser = struct {
         var cur = self.root;
         if (parts.len > 1) {
             for (parts[0 .. parts.len - 1]) |part| {
-                cur = try self.ensureTableChild(cur, part, false);
+                cur = try self.ensureTableChild(cur, part, false, false);
             }
         }
         const leaf_name = parts[parts.len - 1];
@@ -161,22 +182,24 @@ pub const Parser = struct {
             break :blk created;
         };
         const table = try self.makeNode(.{ .table = .{} });
-        table.explicit = true;
+        table.explicit_header = true;
         try list_node.data.array.append(self.arena, table);
         return table;
     }
 
-    fn ensureTableChild(self: *Parser, table: *Node, key: []const u8, explicit: bool) ParseError!*Node {
+    fn ensureTableChild(self: *Parser, table: *Node, key: []const u8, explicit: bool, mark_defined: bool) ParseError!*Node {
         const existing = self.lookupField(table, key);
         if (existing) |node| {
             if (node.is_inline) return error.DuplicateKey;
             if (node.kind != .table) return error.ExpectedTable;
-            if (explicit and node.explicit) return error.DuplicateKey;
-            if (explicit) node.explicit = true;
+            if (explicit and (node.explicit_header or node.defined_by_dotted)) return error.DuplicateKey;
+            if (explicit) node.explicit_header = true;
+            if (mark_defined) node.defined_by_dotted = true;
             return node;
         }
         const child = try self.makeNode(.{ .table = .{} });
-        child.explicit = explicit;
+        child.explicit_header = explicit;
+        child.defined_by_dotted = mark_defined;
         try self.appendField(table, key, child);
         return child;
     }
@@ -273,6 +296,14 @@ pub const Parser = struct {
 
     fn expectString(self: *Parser, text: []const u8) ParseError!void {
         if (!self.matchString(text)) return if (text.len == 2) error.ExpectedClosingArrayTable else error.ExpectedClosingBracket;
+    }
+
+    fn expectLineEnd(self: *Parser) ParseError!void {
+        self.scan.skipSpaces();
+        if (self.scan.pos >= self.source.len) return;
+        const ch = self.source[self.scan.pos];
+        if (ch == '#' or ch == '\n') return;
+        return error.TrailingJunk;
     }
 
     fn skipToNextLine(self: *Parser) void {
