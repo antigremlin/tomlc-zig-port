@@ -168,6 +168,15 @@ pub const Parser = struct {
         var cur = self.root;
         if (parts.len > 1) {
             for (parts[0 .. parts.len - 1]) |part| {
+                if (self.lookupField(cur, part)) |existing| {
+                    if (existing.kind == .array) {
+                        if (existing.data.array.items.len == 0) return error.InvalidTableArray;
+                        const latest = existing.data.array.items[existing.data.array.items.len - 1];
+                        if (latest.kind != .table) return error.ExpectedTable;
+                        cur = latest;
+                        continue;
+                    }
+                }
                 cur = try self.ensureTableChild(cur, part, false, false);
             }
         }
