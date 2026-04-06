@@ -76,6 +76,62 @@ test "inline table dotted key duplicates return errors" {
     ));
 }
 
+
+test "nested array-of-tables resolve against latest parent element" {
+    var doc = try parse(std.testing.allocator,
+        \\[[albums]]
+        \\name = "Born to Run"
+        \\
+        \\  [[albums.songs]]
+        \\  name = "Jungleland"
+        \\
+        \\  [[albums.songs]]
+        \\  name = "Meeting Across the River"
+        \\
+        \\[[albums]]
+        \\name = "Born in the USA"
+        \\
+        \\  [[albums.songs]]
+        \\  name = "Glory Days"
+        \\
+        \\  [[albums.songs]]
+        \\  name = "Dancing in the Dark"
+        \\
+    );
+    defer doc.deinit();
+
+    const albums = doc.get("albums").?.array;
+    try std.testing.expectEqual(@as(usize, 2), albums.len);
+    try std.testing.expectEqualStrings("Born to Run", albums[0].table[0].value.string);
+    try std.testing.expectEqualStrings("Born in the USA", albums[1].table[0].value.string);
+
+    const first_songs = albums[0].table[1].value.array;
+    const second_songs = albums[1].table[1].value.array;
+    try std.testing.expectEqual(@as(usize, 2), first_songs.len);
+    try std.testing.expectEqual(@as(usize, 2), second_songs.len);
+    try std.testing.expectEqualStrings("Jungleland", first_songs[0].table[0].value.string);
+    try std.testing.expectEqualStrings("Dancing in the Dark", second_songs[1].table[0].value.string);
+}
+
+test "array-table-array nested table binds to latest array entry" {
+    var doc = try parse(std.testing.allocator,
+        \\[[a]]
+        \\    [[a.b]]
+        \\        [a.b.c]
+        \\            d = "val0"
+        \\    [[a.b]]
+        \\        [a.b.c]
+        \\            d = "val1"
+        \\
+    );
+    defer doc.deinit();
+
+    const a_items = doc.get("a").?.array;
+    const b_items = a_items[0].table[0].value.array;
+    try std.testing.expectEqual(@as(usize, 2), b_items.len);
+    try std.testing.expectEqualStrings("val0", b_items[0].table[0].value.table[0].value.string);
+    try std.testing.expectEqualStrings("val1", b_items[1].table[0].value.table[0].value.string);
+}
 test "invalid documents return errors" {
     try std.testing.expectError(error.DuplicateKey, parse(std.testing.allocator,
         \\title = "x"
