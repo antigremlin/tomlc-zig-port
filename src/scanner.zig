@@ -95,6 +95,8 @@ pub fn parseValue(allocator: std.mem.Allocator, text: []const u8, index: *usize)
     };
 }
 
+const InlineKeyDepthMax = 10;
+
 fn parseArray(allocator: std.mem.Allocator, text: []const u8, index: *usize) anyerror!value_mod.Value {
     if (text[index.*] != '[') return error.ExpectedArray;
     index.* += 1;
@@ -140,19 +142,20 @@ fn parseInlineTable(allocator: std.mem.Allocator, text: []const u8, index: *usiz
     defer entries.deinit(allocator);
 
     while (true) {
-        skipSpaces(text, index);
+        skipArrayTrivia(text, index);
         if (index.* >= text.len) return error.UnexpectedEof;
         if (text[index.*] == '}') {
             index.* += 1;
             break;
         }
-        const key = try parseKeyPart(allocator, text, index);
-        skipSpaces(text, index);
+        var parts: [InlineKeyDepthMax][]const u8 = undefined;
+        const key_count = try parseInlineKeyParts(allocator, text, index, &parts);
+        skipArrayTrivia(text, index);
         if (index.* >= text.len or text[index.*] != '=') return error.ExpectedEquals;
         index.* += 1;
         const value = try parseValue(allocator, text, index);
-        try entries.append(allocator, .{ .key = key, .value = value });
-        skipSpaces(text, index);
+        try insertInlineTableEntry(allocator, &entries, parts[0..key_count], value);
+        skipArrayTrivia(text, index);
         if (index.* >= text.len) return error.UnexpectedEof;
         if (text[index.*] == ',') {
             index.* += 1;
@@ -166,6 +169,77 @@ fn parseInlineTable(allocator: std.mem.Allocator, text: []const u8, index: *usiz
     }
 
     return .{ .table = try entries.toOwnedSlice(allocator) };
+}
+
+fn parseInlineKeyParts(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    index: *usize,
+    out: *[InlineKeyDepthMax][]const u8,
+) anyerror!usize {
+    var count: usize = 0;
+    var needs_part = true;
+    while (true) {
+        skipArrayTrivia(text, index);
+        if (index.* >= text.len) return error.UnexpectedEof;
+        if (text[index.*] == '=') {
+            if (needs_part) return error.ExpectedKey;
+            break;
+        }
+        if (count == InlineKeyDepthMax) return error.KeyTooDeep;
+        out[count] = try parseKeyPart(allocator, text, index);
+        count += 1;
+        needs_part = false;
+        skipArrayTrivia(text, index);
+        if (index.* < text.len and text[index.*] == '.') {
+            index.* += 1;
+            needs_part = true;
+            continue;
+        }
+        break;
+    }
+    return count;
+}
+
+fn insertInlineTableEntry(
+    allocator: std.mem.Allocator,
+    entries: *std.ArrayList(value_mod.Value.TableEntry),
+    parts: []const []const u8,
+    value: value_mod.Value,
+) anyerror!void {
+    std.debug.assert(parts.len > 0);
+    const key = parts[0];
+    const existing_idx = findTableEntry(entries.items, key);
+
+    if (parts.len == 1) {
+        if (existing_idx != null) return error.DuplicateKey;
+        try entries.append(allocator, .{ .key = key, .value = value });
+        return;
+    }
+
+    if (existing_idx) |idx| {
+        const existing = entries.items[idx].value;
+        if (existing != .table) return error.DuplicateKey;
+        var child = std.ArrayList(value_mod.Value.TableEntry){};
+        try child.appendSlice(allocator, existing.table);
+        try insertInlineTableEntry(allocator, &child, parts[1..], value);
+        entries.items[idx].value = .{ .table = try child.toOwnedSlice(allocator) };
+        return;
+    }
+
+    var child = std.ArrayList(value_mod.Value.TableEntry){};
+    try insertInlineTableEntry(allocator, &child, parts[1..], value);
+    try entries.append(allocator, .{
+        .key = key,
+        .value = .{ .table = try child.toOwnedSlice(allocator) },
+    });
+}
+
+fn findTableEntry(entries: []const value_mod.Value.TableEntry, key: []const u8) ?usize {
+    for (entries, 0..) |entry, idx| {
+        if (std.mem.eql(u8, entry.key, key)) return idx;
+    }
+    return null;
 }
 
 fn parseScalar(text: []const u8, index: *usize) anyerror!value_mod.Value {
