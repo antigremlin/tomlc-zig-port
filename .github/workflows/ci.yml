@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Zig + toml-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup mise
+        uses: jdx/mise-action@v3
+
+      - name: Trust mise config
+        run: mise trust mise.toml
+
+      - name: Install tools
+        run: mise install
+
+      - name: Prepare test tooling
+        run: mise run prepare
+
+      - name: Run Zig unit tests
+        run: mise x -- zig build test
+
+      - name: Run toml-test suite
+        run: mise run toml-test
