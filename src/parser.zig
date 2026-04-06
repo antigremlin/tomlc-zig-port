@@ -53,6 +53,7 @@ pub const Parser = struct {
 
     pub fn parse(arena: std.mem.Allocator, source: []const u8) ParseError!Value {
         if (!std.unicode.utf8ValidateSlice(source)) return error.InvalidUtf8;
+        try validateLineEndings(source);
         var parser = Parser{
             .arena = arena,
             .source = source,
@@ -68,7 +69,7 @@ pub const Parser = struct {
 
     fn parseDocument(self: *Parser) ParseError!void {
         while (true) {
-            self.scan.skipWhitespaceAndComments();
+            try self.scan.skipWhitespaceAndComments();
             if (self.scan.pos >= self.source.len) break;
             if (self.source[self.scan.pos] == '[') {
                 try self.parseHeader();
@@ -76,7 +77,7 @@ pub const Parser = struct {
                 try self.parseKeyValue(self.current_table);
             }
             try self.expectLineEnd();
-            self.skipToNextLine();
+            try self.skipToNextLine();
         }
     }
 
@@ -306,8 +307,25 @@ pub const Parser = struct {
         return error.TrailingJunk;
     }
 
-    fn skipToNextLine(self: *Parser) void {
-        while (self.scan.pos < self.source.len and self.source[self.scan.pos] != '\n') self.scan.pos += 1;
+    fn validateLineEndings(source: []const u8) ParseError!void {
+        var i: usize = 0;
+        while (i < source.len) : (i += 1) {
+            if (source[i] != '\r') continue;
+            if (i + 1 >= source.len or source[i + 1] != '\n') return error.BareCarriageReturn;
+            i += 1;
+        }
+    }
+
+    fn skipToNextLine(self: *Parser) ParseError!void {
+        if (self.scan.pos < self.source.len and self.source[self.scan.pos] == '#') {
+            self.scan.pos += 1;
+            while (self.scan.pos < self.source.len and self.source[self.scan.pos] != '\n') : (self.scan.pos += 1) {
+                const ch = self.source[self.scan.pos];
+                if (ch != '\t' and (ch < 0x20 or ch == 0x7f)) return error.InvalidCommentCodepoint;
+            }
+        } else {
+            while (self.scan.pos < self.source.len and self.source[self.scan.pos] != '\n') self.scan.pos += 1;
+        }
         if (self.scan.pos < self.source.len and self.source[self.scan.pos] == '\n') {
             self.scan.pos += 1;
             self.scan.line += 1;

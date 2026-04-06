@@ -52,7 +52,7 @@ pub const Scanner = struct {
         }
     }
 
-    pub fn skipWhitespaceAndComments(self: *Scanner) void {
+    pub fn skipWhitespaceAndComments(self: *Scanner) anyerror!void {
         while (self.pos < self.source.len) {
             switch (self.source[self.pos]) {
                 ' ', '\t', '\r' => self.pos += 1,
@@ -61,7 +61,10 @@ pub const Scanner = struct {
                     self.pos += 1;
                 },
                 '#' => {
-                    while (self.pos < self.source.len and self.source[self.pos] != '\n') self.pos += 1;
+                    self.pos += 1;
+                    while (self.pos < self.source.len and self.source[self.pos] != '\n') : (self.pos += 1) {
+                        if (isForbiddenCommentCodepoint(self.source[self.pos])) return error.InvalidCommentCodepoint;
+                    }
                 },
                 else => return,
             }
@@ -105,7 +108,7 @@ fn parseArray(allocator: std.mem.Allocator, text: []const u8, index: *usize) any
 
     var needs_value = true;
     while (true) {
-        skipArrayTrivia(text, index);
+        try skipArrayTrivia(text, index);
         if (index.* >= text.len) return error.UnexpectedEof;
         if (text[index.*] == ']') {
             if (needs_value and items.items.len > 0) {
@@ -118,7 +121,7 @@ fn parseArray(allocator: std.mem.Allocator, text: []const u8, index: *usize) any
         if (!needs_value) return error.ExpectedArrayDelimiter;
         try items.append(allocator, try parseValue(allocator, text, index));
         needs_value = false;
-        skipArrayTrivia(text, index);
+        try skipArrayTrivia(text, index);
         if (index.* >= text.len) return error.UnexpectedEof;
         if (text[index.*] == ',') {
             index.* += 1;
@@ -142,7 +145,7 @@ fn parseInlineTable(allocator: std.mem.Allocator, text: []const u8, index: *usiz
     defer entries.deinit(allocator);
 
     while (true) {
-        skipArrayTrivia(text, index);
+        try skipArrayTrivia(text, index);
         if (index.* >= text.len) return error.UnexpectedEof;
         if (text[index.*] == '}') {
             index.* += 1;
@@ -150,12 +153,12 @@ fn parseInlineTable(allocator: std.mem.Allocator, text: []const u8, index: *usiz
         }
         var parts: [InlineKeyDepthMax][]const u8 = undefined;
         const key_count = try parseInlineKeyParts(allocator, text, index, &parts);
-        skipArrayTrivia(text, index);
+        try skipArrayTrivia(text, index);
         if (index.* >= text.len or text[index.*] != '=') return error.ExpectedEquals;
         index.* += 1;
         const value = try parseValue(allocator, text, index);
         try insertInlineTableEntry(allocator, &entries, parts[0..key_count], value);
-        skipArrayTrivia(text, index);
+        try skipArrayTrivia(text, index);
         if (index.* >= text.len) return error.UnexpectedEof;
         if (text[index.*] == ',') {
             index.* += 1;
@@ -180,7 +183,7 @@ fn parseInlineKeyParts(
     var count: usize = 0;
     var needs_part = true;
     while (true) {
-        skipArrayTrivia(text, index);
+        try skipArrayTrivia(text, index);
         if (index.* >= text.len) return error.UnexpectedEof;
         if (text[index.*] == '=') {
             if (needs_part) return error.ExpectedKey;
@@ -190,7 +193,7 @@ fn parseInlineKeyParts(
         out[count] = try parseKeyPart(allocator, text, index);
         count += 1;
         needs_part = false;
-        skipArrayTrivia(text, index);
+        try skipArrayTrivia(text, index);
         if (index.* < text.len and text[index.*] == '.') {
             index.* += 1;
             needs_part = true;
@@ -426,6 +429,11 @@ fn isForbiddenStringCodepoint(ch: u8, multiline: bool) bool {
     return ch < 0x20 or ch == 0x7f;
 }
 
+fn isForbiddenCommentCodepoint(ch: u8) bool {
+    if (ch == '\t') return false;
+    return ch < 0x20 or ch == 0x7f;
+}
+
 fn isHexDigit(ch: u8) bool {
     return std.ascii.isDigit(ch) or (ch >= 'a' and ch <= 'f') or (ch >= 'A' and ch <= 'F');
 }
@@ -651,11 +659,14 @@ fn skipSpacesAndNewlines(text: []const u8, index: *usize) void {
     while (index.* < text.len and (text[index.*] == ' ' or text[index.*] == '\t' or text[index.*] == '\r' or text[index.*] == '\n')) : (index.* += 1) {}
 }
 
-fn skipArrayTrivia(text: []const u8, index: *usize) void {
+fn skipArrayTrivia(text: []const u8, index: *usize) anyerror!void {
     while (index.* < text.len) {
         skipSpacesAndNewlines(text, index);
         if (index.* < text.len and text[index.*] == '#') {
-            while (index.* < text.len and text[index.*] != '\n') : (index.* += 1) {}
+            index.* += 1;
+            while (index.* < text.len and text[index.*] != '\n') : (index.* += 1) {
+                if (isForbiddenCommentCodepoint(text[index.*])) return error.InvalidCommentCodepoint;
+            }
             continue;
         }
         break;
