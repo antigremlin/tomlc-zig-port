@@ -49,6 +49,33 @@ test "inline tables, arrays, and datetimes" {
     try std.testing.expectEqual(@as(i16, 0), doc.get("when").?.datetime_tz.tz_minutes);
 }
 
+test "inline tables support dotted keys" {
+    var doc = try parse(std.testing.allocator,
+        \\point = { x = { y = { z = 1 } }, "a" . b = 2, c . "d" = 3 }
+        \\
+    );
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(i64, 1), doc.get("point.x.y.z").?.integer);
+    try std.testing.expectEqual(@as(i64, 2), doc.get("point.a.b").?.integer);
+    try std.testing.expectEqual(@as(i64, 3), doc.get("point.c.d").?.integer);
+}
+
+test "inline table dotted key duplicates return errors" {
+    try std.testing.expectError(error.DuplicateKey, parse(std.testing.allocator,
+        \\point = { a.b = 1, a.b = 2 }
+        \\
+    ));
+    try std.testing.expectError(error.DuplicateKey, parse(std.testing.allocator,
+        \\point = { a = 1, a.b = 2 }
+        \\
+    ));
+    try std.testing.expectError(error.DuplicateKey, parse(std.testing.allocator,
+        \\point = { a.b = 1, a = 2 }
+        \\
+    ));
+}
+
 test "invalid documents return errors" {
     try std.testing.expectError(error.DuplicateKey, parse(std.testing.allocator,
         \\title = "x"
