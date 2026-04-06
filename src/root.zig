@@ -212,3 +212,32 @@ test "translated scanner cases" {
     const literal_x = try scanner.parseValue(allocator, "'literal \\x41'", &idx);
     try std.testing.expectEqualStrings("literal \\x41", literal_x.string);
 }
+
+test "comments reject forbidden control codepoints" {
+    const cases = [_][]const u8{
+        "key = \"ok\" # \x00\n",
+        "key = \"ok\" # \x10\n",
+        "key = \"ok\" # \x7f\n",
+    };
+
+    for (cases) |input| {
+        try std.testing.expectError(error.InvalidCommentCodepoint, parse(std.testing.allocator, input));
+    }
+}
+
+test "bare carriage returns are rejected" {
+    try std.testing.expectError(error.BareCarriageReturn, parse(
+        std.testing.allocator,
+        "# comment\r\n\r",
+    ));
+}
+
+test "comments allow tab and utf8" {
+    var doc = try parse(
+        std.testing.allocator,
+        "key = 1 # tab\t☃\n",
+    );
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(i64, 1), doc.get("key").?.integer);
+}
