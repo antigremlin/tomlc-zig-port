@@ -143,6 +143,8 @@ fn parseInlineTable(allocator: std.mem.Allocator, text: []const u8, index: *usiz
     index.* += 1;
     var entries = std.ArrayList(value_mod.Value.TableEntry){};
     defer entries.deinit(allocator);
+    var sealed_keys = std.ArrayList([]const u8){};
+    defer sealed_keys.deinit(allocator);
 
     while (true) {
         try skipArrayTrivia(text, index);
@@ -157,7 +159,7 @@ fn parseInlineTable(allocator: std.mem.Allocator, text: []const u8, index: *usiz
         if (index.* >= text.len or text[index.*] != '=') return error.ExpectedEquals;
         index.* += 1;
         const value = try parseValue(allocator, text, index);
-        try insertInlineTableEntry(allocator, &entries, parts[0..key_count], value);
+        try insertInlineTableEntry(allocator, &entries, &sealed_keys, parts[0..key_count], value);
         try skipArrayTrivia(text, index);
         if (index.* >= text.len) return error.UnexpectedEof;
         if (text[index.*] == ',') {
@@ -207,6 +209,7 @@ fn parseInlineKeyParts(
 fn insertInlineTableEntry(
     allocator: std.mem.Allocator,
     entries: *std.ArrayList(value_mod.Value.TableEntry),
+    sealed_keys: *std.ArrayList([]const u8),
     parts: []const []const u8,
     value: value_mod.Value,
 ) anyerror!void {
@@ -217,25 +220,36 @@ fn insertInlineTableEntry(
     if (parts.len == 1) {
         if (existing_idx != null) return error.DuplicateKey;
         try entries.append(allocator, .{ .key = key, .value = value });
+        if (value == .table) try sealed_keys.append(allocator, key);
         return;
     }
 
     if (existing_idx) |idx| {
+        if (isSealedInlineKey(sealed_keys.items, key)) return error.DuplicateKey;
         const existing = entries.items[idx].value;
         if (existing != .table) return error.DuplicateKey;
         var child = std.ArrayList(value_mod.Value.TableEntry){};
         try child.appendSlice(allocator, existing.table);
-        try insertInlineTableEntry(allocator, &child, parts[1..], value);
+        var child_sealed_keys = std.ArrayList([]const u8){};
+        try insertInlineTableEntry(allocator, &child, &child_sealed_keys, parts[1..], value);
         entries.items[idx].value = .{ .table = try child.toOwnedSlice(allocator) };
         return;
     }
 
     var child = std.ArrayList(value_mod.Value.TableEntry){};
-    try insertInlineTableEntry(allocator, &child, parts[1..], value);
+    var child_sealed_keys = std.ArrayList([]const u8){};
+    try insertInlineTableEntry(allocator, &child, &child_sealed_keys, parts[1..], value);
     try entries.append(allocator, .{
         .key = key,
         .value = .{ .table = try child.toOwnedSlice(allocator) },
     });
+}
+
+fn isSealedInlineKey(keys: []const []const u8, key: []const u8) bool {
+    for (keys) |sealed| {
+        if (std.mem.eql(u8, sealed, key)) return true;
+    }
+    return false;
 }
 
 fn findTableEntry(entries: []const value_mod.Value.TableEntry, key: []const u8) ?usize {
@@ -340,8 +354,21 @@ fn parseInteger(raw: []const u8) ?i64 {
         out += 1;
     }
     const buf = cleaned[0..out];
-    const parsed = std.fmt.parseInt(i64, buf, base) catch return null;
-    return sign * parsed;
+    if (base != 10 and sign < 0) return null;
+
+    const unsigned = std.fmt.parseInt(u64, buf, base) catch return null;
+    if (base != 10) {
+        if (unsigned > std.math.maxInt(i64)) return null;
+        return @as(i64, @intCast(unsigned));
+    }
+    if (sign > 0) {
+        if (unsigned > std.math.maxInt(i64)) return null;
+        return @as(i64, @intCast(unsigned));
+    }
+    const min_mag = @as(u64, std.math.maxInt(i64)) + 1;
+    if (unsigned > min_mag) return null;
+    if (unsigned == min_mag) return std.math.minInt(i64);
+    return -@as(i64, @intCast(unsigned));
 }
 
 fn parseFloat(raw: []const u8) ?f64 {
@@ -430,7 +457,7 @@ fn isForbiddenStringCodepoint(ch: u8, multiline: bool) bool {
 }
 
 fn isForbiddenCommentCodepoint(ch: u8) bool {
-    if (ch == '\t') return false;
+    if (ch == '\t' or ch == '\r') return false;
     return ch < 0x20 or ch == 0x7f;
 }
 
@@ -525,6 +552,7 @@ fn parseBasicString(allocator: std.mem.Allocator, text: []const u8, index: *usiz
                 const next = text[index.* + 1];
                 switch (next) {
                     'b' => try list.append(allocator, 0x08),
+                    'e' => try list.append(allocator, 0x1b),
                     'n' => try list.append(allocator, '\n'),
                     't' => try list.append(allocator, '\t'),
                     'f' => try list.append(allocator, 0x0c),
@@ -575,6 +603,7 @@ fn parseBasicString(allocator: std.mem.Allocator, text: []const u8, index: *usiz
             const next = text[index.* + 1];
             switch (next) {
                 'b' => try list.append(allocator, 0x08),
+                'e' => try list.append(allocator, 0x1b),
                 't' => try list.append(allocator, '\t'),
                 'n' => try list.append(allocator, '\n'),
                 'f' => try list.append(allocator, 0x0c),
