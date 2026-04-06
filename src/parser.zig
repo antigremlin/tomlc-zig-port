@@ -25,6 +25,7 @@ const Node = struct {
     explicit_header: bool = false,
     defined_by_dotted: bool = false,
     is_inline: bool = false,
+    is_array_of_tables: bool = false,
     data: union(NodeKind) {
         string: []const u8,
         integer: i64,
@@ -153,6 +154,7 @@ pub const Parser = struct {
             const existing = self.lookupField(cur, part);
             if (existing) |node| {
                 if (!is_last and node.kind == .array) {
+                    if (!node.is_array_of_tables) return error.InvalidTableArray;
                     if (node.data.array.items.len == 0) return error.InvalidTableArray;
                     const latest = node.data.array.items[node.data.array.items.len - 1];
                     if (latest.kind != .table) return error.ExpectedTable;
@@ -171,6 +173,7 @@ pub const Parser = struct {
             for (parts[0 .. parts.len - 1]) |part| {
                 if (self.lookupField(cur, part)) |existing| {
                     if (existing.kind == .array) {
+                        if (!existing.is_array_of_tables) return error.InvalidTableArray;
                         if (existing.data.array.items.len == 0) return error.InvalidTableArray;
                         const latest = existing.data.array.items[existing.data.array.items.len - 1];
                         if (latest.kind != .table) return error.ExpectedTable;
@@ -185,9 +188,11 @@ pub const Parser = struct {
         const existing = self.lookupField(cur, leaf_name);
         const list_node = if (existing) |node| blk: {
             if (node.kind != .array) return error.InvalidTableArray;
+            if (!node.is_array_of_tables) return error.InvalidTableArray;
             break :blk node;
         } else blk: {
             const created = try self.makeNode(.{ .array = .{} });
+            created.is_array_of_tables = true;
             try self.appendField(cur, leaf_name, created);
             break :blk created;
         };
@@ -217,7 +222,7 @@ pub const Parser = struct {
     fn insertEntry(self: *Parser, table: *Node, key: []const u8, value: Value, is_inline: bool) ParseError!void {
         if (self.lookupField(table, key) != null) return error.DuplicateKey;
         const node = try self.nodeFromValue(value);
-        node.is_inline = is_inline and node.kind == .table;
+        if (node.kind == .table and is_inline) node.is_inline = true;
         try self.appendField(table, key, node);
     }
 
