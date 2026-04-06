@@ -106,8 +106,26 @@ test "translated scanner cases" {
     try std.testing.expectEqualStrings("Snowman: ☃", unicode.string);
 
     idx = 0;
+    const byte_escape = try scanner.parseValue(allocator, "\"A\\x42C\"", &idx);
+    try std.testing.expectEqualStrings("ABC", byte_escape.string);
+
+    idx = 0;
+    const multiline_byte_escape = try scanner.parseValue(allocator, "\"\"\"line \\x41\"\"\"", &idx);
+    try std.testing.expectEqualStrings("line A", multiline_byte_escape.string);
+
+    idx = 0;
     try std.testing.expectError(error.UnsupportedEscape, scanner.parseValue(allocator, "\"bad: \\q\"", &idx));
 
     idx = 0;
     try std.testing.expectError(error.InvalidUnicodeEscape, scanner.parseValue(allocator, "\"bad: \\uD800\"", &idx));
+
+    idx = 0;
+    try std.testing.expectError(error.InvalidByteEscape, scanner.parseValue(allocator, "\"bad: \\x\"", &idx));
+
+    idx = 0;
+    try std.testing.expectError(error.InvalidByteEscape, scanner.parseValue(allocator, "\"bad: \\xG0\"", &idx));
+
+    idx = 0;
+    const literal_x = try scanner.parseValue(allocator, "'literal \\x41'", &idx);
+    try std.testing.expectEqualStrings("literal \\x41", literal_x.string);
 }

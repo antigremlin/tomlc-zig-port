@@ -381,6 +381,29 @@ fn appendUnicodeEscape(list: *std.ArrayList(u8), allocator: std.mem.Allocator, t
     index.* += digits;
 }
 
+fn appendByteEscape(list: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8, index: *usize) anyerror!void {
+    const digits: usize = 2;
+    if (index.* + digits > text.len) return error.InvalidByteEscape;
+
+    var codepoint: u21 = 0;
+    var i: usize = 0;
+    while (i < digits) : (i += 1) {
+        const ch = text[index.* + i];
+        if (!isHexDigit(ch)) return error.InvalidByteEscape;
+        codepoint = (codepoint << 4) | @as(u21, switch (ch) {
+            '0'...'9' => ch - '0',
+            'a'...'f' => ch - 'a' + 10,
+            'A'...'F' => ch - 'A' + 10,
+            else => unreachable,
+        });
+    }
+
+    var utf8_buf: [4]u8 = undefined;
+    const utf8_len = std.unicode.utf8Encode(codepoint, &utf8_buf) catch return error.InvalidByteEscape;
+    try list.appendSlice(allocator, utf8_buf[0..utf8_len]);
+    index.* += digits;
+}
+
 fn parseBasicString(allocator: std.mem.Allocator, text: []const u8, index: *usize, allow_multiline: bool) anyerror![]const u8 {
     if (index.* + 2 < text.len and text[index.*] == '"' and text[index.* + 1] == '"' and text[index.* + 2] == '"') {
         if (!allow_multiline) return error.MultilineNotAllowed;
@@ -431,6 +454,11 @@ fn parseBasicString(allocator: std.mem.Allocator, text: []const u8, index: *usiz
                         try appendUnicodeEscape(&list, allocator, text, index, 4);
                         continue;
                     },
+                    'x' => {
+                        index.* += 2;
+                        try appendByteEscape(&list, allocator, text, index);
+                        continue;
+                    },
                     'U' => {
                         index.* += 2;
                         try appendUnicodeEscape(&list, allocator, text, index, 8);
@@ -474,6 +502,11 @@ fn parseBasicString(allocator: std.mem.Allocator, text: []const u8, index: *usiz
                 'u' => {
                     index.* += 2;
                     try appendUnicodeEscape(&list, allocator, text, index, 4);
+                    continue;
+                },
+                'x' => {
+                    index.* += 2;
+                    try appendByteEscape(&list, allocator, text, index);
                     continue;
                 },
                 'U' => {
