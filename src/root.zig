@@ -132,6 +132,35 @@ test "array-table-array nested table binds to latest array entry" {
     try std.testing.expectEqualStrings("val0", b_items[0].table[0].value.table[0].value.string);
     try std.testing.expectEqualStrings("val1", b_items[1].table[0].value.table[0].value.string);
 }
+
+test "cannot extend tables in literal arrays via headers" {
+    try std.testing.expectError(error.InvalidTableArray, parse(std.testing.allocator,
+        \\a = [{ b = 1 }]
+        \\[a.c]
+        \\foo = 1
+        \\
+    ));
+    try std.testing.expectError(error.InvalidTableArray, parse(std.testing.allocator,
+        \\fruit = []
+        \\[[fruit]]
+        \\
+    ));
+}
+
+test "cannot extend inline tables via headers or dotted assignments" {
+    try std.testing.expectError(error.DuplicateKey, parse(std.testing.allocator,
+        \\a = {}
+        \\[a.b]
+        \\
+    ));
+    try std.testing.expectError(error.DuplicateKey, parse(std.testing.allocator,
+        \\[product]
+        \\type = { name = "Nail" }
+        \\type.edible = false
+        \\
+    ));
+}
+
 test "invalid documents return errors" {
     try std.testing.expectError(error.DuplicateKey, parse(std.testing.allocator,
         \\title = "x"
